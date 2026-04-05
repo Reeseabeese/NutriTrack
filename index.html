@@ -119,11 +119,11 @@
     .log-panel { display: none; }
     .log-panel.active { display: block; }
 
-    .photo-drop { border: 2px dashed var(--border); border-radius: var(--radius); padding: 32px 16px; text-align: center; cursor: pointer; background: var(--card); transition: border-color .2s; touch-action: manipulation; }
-    .photo-drop:active { border-color: var(--primary); background: var(--primary-light); }
-    .photo-drop .icon { font-size: 48px; margin-bottom: 8px; }
-    .photo-drop p { color: var(--text-muted); font-size: 14px; font-weight: 500; }
-    .photo-drop p strong { color: var(--primary); }
+    .photo-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+    .photo-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 22px 12px; border: 2px solid var(--border); border-radius: var(--radius); background: var(--card); cursor: pointer; touch-action: manipulation; transition: all .15s; font-size: 13px; font-weight: 600; color: var(--text-muted); user-select: none; }
+    .photo-btn:active { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+    .photo-btn.selected { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+    .photo-btn .btn-icon { font-size: 34px; }
     #photo-preview { width: 100%; max-height: 240px; object-fit: cover; border-radius: 12px; margin-top: 12px; display: none; }
 
     label.field-label { font-size: 13px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 6px; }
@@ -332,12 +332,19 @@
         </div>
 
         <div class="log-panel active" id="panel-photo">
-          <div class="photo-drop" onclick="document.getElementById('file-input').click()">
-            <div class="icon">📸</div>
-            <p>Tap to take a photo<br>or select from library</p>
-            <img id="photo-preview" alt="Preview">
+          <div class="photo-btns">
+            <div class="photo-btn" id="btn-camera" onclick="document.getElementById('file-camera').click()">
+              <div class="btn-icon">📷</div>
+              Take Photo
+            </div>
+            <div class="photo-btn" id="btn-library" onclick="document.getElementById('file-library').click()">
+              <div class="btn-icon">🖼️</div>
+              Photo Library
+            </div>
           </div>
-          <input type="file" id="file-input" accept="image/*" capture="environment" style="display:none" onchange="App.handlePhoto(this)">
+          <input type="file" id="file-camera" accept="image/*" capture="environment" style="display:none" onchange="App.handlePhoto(this,'camera')">
+          <input type="file" id="file-library" accept="image/*" style="display:none" onchange="App.handlePhoto(this,'library')">
+          <img id="photo-preview" alt="Preview" style="display:none;width:100%;max-height:240px;object-fit:cover;border-radius:12px;margin-top:4px">
         </div>
 
         <div class="log-panel" id="panel-text">
@@ -887,6 +894,9 @@ const App = {
     document.getElementById('meal-name-input').value = '';
     document.getElementById('text-input').value = '';
     document.getElementById('photo-preview').style.display = 'none';
+    document.getElementById('file-camera').value = '';
+    document.getElementById('file-library').value = '';
+    document.querySelectorAll('.photo-btn').forEach(b => b.classList.remove('selected'));
     this.photoB64 = null;
     this.photoType = null;
     document.getElementById('analyze-label').textContent = '✨ Analyze with AI';
@@ -900,19 +910,37 @@ const App = {
     document.getElementById('panel-' + tab).classList.add('active');
   },
 
-  handlePhoto(input) {
+  handlePhoto(input, source) {
     const file = input.files[0];
     if (!file) return;
+
+    // Highlight the active button
+    document.querySelectorAll('.photo-btn').forEach(b => b.classList.remove('selected'));
+    document.getElementById(source === 'camera' ? 'btn-camera' : 'btn-library').classList.add('selected');
+
     const reader = new FileReader();
     reader.onload = e => {
-      const result = e.target.result;
-      // Extract base64
-      const b64 = result.split(',')[1];
-      this.photoB64 = b64;
-      this.photoType = file.type || 'image/jpeg';
-      const preview = document.getElementById('photo-preview');
-      preview.src = result;
-      preview.style.display = 'block';
+      const img = new Image();
+      img.onload = () => {
+        // Compress: resize to max 1920px on longest side, encode as JPEG @ 85%
+        // This brings typical 10–20 MB phone photos well under the 5 MB API limit
+        const MAX = 1920;
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) {
+          if (w >= h) { h = Math.round(h * MAX / w); w = MAX; }
+          else        { w = Math.round(w * MAX / h); h = MAX; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        const compressed = canvas.toDataURL('image/jpeg', 0.85);
+        this.photoB64 = compressed.split(',')[1];
+        this.photoType = 'image/jpeg';
+        const preview = document.getElementById('photo-preview');
+        preview.src = compressed;
+        preview.style.display = 'block';
+      };
+      img.src = e.target.result;
     };
     reader.readAsDataURL(file);
   },
