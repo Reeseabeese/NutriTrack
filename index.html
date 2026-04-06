@@ -321,6 +321,17 @@
           ⚠️ No API key set. Go to <strong>Profile</strong> to add your Claude API key for AI analysis.
         </div>
 
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+          <div>
+            <label class="field-label">Date</label>
+            <input type="date" id="log-date-input">
+          </div>
+          <div>
+            <label class="field-label">Time</label>
+            <input type="time" id="log-time-input">
+          </div>
+        </div>
+
         <div class="form-group">
           <label class="field-label">Meal name (optional)</label>
           <input type="text" id="meal-name-input" placeholder="e.g. Breakfast, Lunch, Snack…">
@@ -653,12 +664,20 @@ const Calc = {
   }
 };
 
+// Returns YYYY-MM-DD in LOCAL time (not UTC) — fixes timezone offset bug
+function App_localDate(d) {
+  const date = d || new Date();
+  return date.getFullYear() + '-' +
+    String(date.getMonth() + 1).padStart(2, '0') + '-' +
+    String(date.getDate()).padStart(2, '0');
+}
+
 // ═══════════════════════════════════════
 // APP
 // ═══════════════════════════════════════
 const App = {
   currentView: 'today',
-  currentDate: new Date().toISOString().slice(0,10),
+  currentDate: App_localDate(),
   charts: {},
   pendingMeal: null,
   photoB64: null,
@@ -700,8 +719,8 @@ const App = {
       dn.style.display = 'flex';
       document.getElementById('header-date').textContent = this.formatDateShort(this.currentDate);
       const nextBtn = document.getElementById('date-next');
-      nextBtn.style.opacity = this.currentDate >= new Date().toISOString().slice(0,10) ? '0.3' : '1';
-      nextBtn.style.pointerEvents = this.currentDate >= new Date().toISOString().slice(0,10) ? 'none' : 'auto';
+      nextBtn.style.opacity = this.currentDate >= this.localDate() ? '0.3' : '1';
+      nextBtn.style.pointerEvents = this.currentDate >= this.localDate() ? 'none' : 'auto';
       // Show score badge
       const log = Store.getLog(this.currentDate);
       const profile = Store.getProfile();
@@ -723,8 +742,8 @@ const App = {
   changeDate(delta) {
     const d = new Date(this.currentDate);
     d.setDate(d.getDate() + delta);
-    const today = new Date().toISOString().slice(0,10);
-    const newDate = d.toISOString().slice(0,10);
+    const today = this.localDate();
+    const newDate = this.localDate(d);
     if (newDate > today) return;
     this.currentDate = newDate;
     this.updateHeader();
@@ -891,6 +910,20 @@ const App = {
     const profile = Store.getProfile();
     const warn = document.getElementById('no-api-warn');
     warn.style.display = !profile.apiKey ? 'block' : 'none';
+
+    // Date: default to whichever day is currently being viewed
+    const dateInput = document.getElementById('log-date-input');
+    dateInput.value = this.currentDate;
+    dateInput.max = this.localDate(); // can't log future dates
+
+    // Time: default to now (if logging for today) or 12:00 (if a past day)
+    const timeInput = document.getElementById('log-time-input');
+    const now = new Date();
+    const isToday = this.currentDate === this.localDate();
+    timeInput.value = isToday
+      ? String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0')
+      : '12:00';
+
     document.getElementById('meal-name-input').value = '';
     document.getElementById('text-input').value = '';
     document.getElementById('photo-preview').style.display = 'none';
@@ -1089,9 +1122,17 @@ Units assumed: calories=kcal, protein/carbs/fat/fiber/sugar=grams, sodium/calciu
       nutrition[k] = el ? parseFloat(el.value) || 0 : 0;
     });
 
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const today = new Date().toISOString().slice(0,10);
+    // Read date & time from the log form (supports past-day logging)
+    const targetDate = document.getElementById('log-date-input')?.value || this.localDate();
+    const rawTime   = document.getElementById('log-time-input')?.value || '';
+    // Format time as 12-hour for display (e.g. "7:30 PM")
+    let timeStr = rawTime;
+    if (rawTime) {
+      const [hh, mm] = rawTime.split(':').map(Number);
+      const ampm = hh >= 12 ? 'PM' : 'AM';
+      const h12 = hh % 12 || 12;
+      timeStr = `${h12}:${String(mm).padStart(2,'0')} ${ampm}`;
+    }
 
     const meal = {
       id: Date.now().toString(36),
@@ -1101,14 +1142,17 @@ Units assumed: calories=kcal, protein/carbs/fat/fiber/sugar=grams, sodium/calciu
       nutrition
     };
 
-    const log = Store.getLog(today);
+    const log = Store.getLog(targetDate);
     log.meals.push(meal);
-    Store.saveLog(today, log);
+    // Keep meals sorted by time within the day
+    log.meals.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+    Store.saveLog(targetDate, log);
 
     this.closeModal();
-    this.currentDate = today;
+    this.currentDate = targetDate;
     this.navigate('today');
-    this.showToast('✅ Meal saved!');
+    const isToday = targetDate === this.localDate();
+    this.showToast(isToday ? '✅ Meal saved!' : `✅ Saved to ${this.formatDateShort(targetDate)}`);
   },
 
   // ── PROGRESS VIEW ──
@@ -1140,10 +1184,9 @@ Units assumed: calories=kcal, protein/carbs/fat/fiber/sugar=grams, sodium/calciu
 
     // Calorie chart (last 14 days)
     const last14 = [];
-    const today = new Date().toISOString().slice(0,10);
     for (let i = 13; i >= 0; i--) {
       const d = new Date(); d.setDate(d.getDate() - i);
-      const ds = d.toISOString().slice(0,10);
+      const ds = this.localDate(d);
       const log = Store.getLog(ds);
       const tot = Calc.totalNutrition(log.meals);
       last14.push({ date: ds, cals: Math.round(tot.calories) });
@@ -1159,7 +1202,7 @@ Units assumed: calories=kcal, protein/carbs/fat/fiber/sugar=grams, sodium/calciu
     let totP=0, totC=0, totF=0, days=0;
     for (let i=6; i>=0; i--) {
       const d = new Date(); d.setDate(d.getDate() - i);
-      const ds = d.toISOString().slice(0,10);
+      const ds = this.localDate(d);
       const log = Store.getLog(ds);
       if (log.meals && log.meals.length > 0) {
         const t = Calc.totalNutrition(log.meals);
@@ -1216,7 +1259,7 @@ Units assumed: calories=kcal, protein/carbs/fat/fiber/sugar=grams, sodium/calciu
     const input = document.getElementById('weight-input');
     const val = parseFloat(input.value);
     if (!val || val < 50 || val > 400) { this.showToast('Enter a valid weight'); return; }
-    const today = new Date().toISOString().slice(0,10);
+    const today = this.localDate();
     const weights = Store.getWeights();
     const existing = weights.findIndex(w => w.date === today);
     if (existing >= 0) weights[existing].weight = val;
@@ -1352,7 +1395,7 @@ Units assumed: calories=kcal, protein/carbs/fat/fiber/sugar=grams, sodium/calciu
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'nutritrack-export-' + new Date().toISOString().slice(0,10) + '.json';
+    a.href = url; a.download = 'nutritrack-export-' + this.localDate() + '.json';
     a.click(); URL.revokeObjectURL(url);
   },
 
@@ -1371,7 +1414,7 @@ Units assumed: calories=kcal, protein/carbs/fat/fiber/sugar=grams, sodium/calciu
     Store.clearAll();
     Store.saveProfile(DEFAULT_PROFILE);
     this.closeModal();
-    this.currentDate = new Date().toISOString().slice(0,10);
+    this.currentDate = this.localDate();
     this.navigate('today');
     this.showToast('Data reset');
   },
@@ -1388,6 +1431,8 @@ Units assumed: calories=kcal, protein/carbs/fat/fiber/sugar=grams, sodium/calciu
   },
 
   // ── HELPERS ──
+  localDate(d) { return App_localDate(d); },
+
   formatDateShort(dateStr) {
     if (!dateStr) return '';
     const d = new Date(dateStr + 'T12:00:00');
